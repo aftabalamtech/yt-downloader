@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import unquote
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.background import BackgroundTask
@@ -39,15 +39,6 @@ YT_DLP_BASE = [
 ]
 
 
-def _cleanup_old_files():
-    for pattern in ["/tmp/*.mp4", "/tmp/*.mp3", "/tmp/*.m4a", "/tmp/*.webm"]:
-        for f in glob.glob(pattern):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-
-
 def _extract_video_id(url: str) -> str:
     if "shorts/" in url:
         return url.split("shorts/")[1].split("?")[0].split("&")[0]
@@ -79,14 +70,6 @@ def _render_html(name: str) -> HTMLResponse:
     path = TEMPLATES_DIR / name
     content = path.read_text(encoding="utf-8")
     return HTMLResponse(content=content)
-
-
-def _file_headers(filename: str) -> dict:
-    return {
-        "Content-Disposition": f'attachment; filename="{filename}"',
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "no-cache",
-    }
 
 
 @app.get("/")
