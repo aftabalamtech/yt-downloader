@@ -7,7 +7,7 @@ from urllib.parse import unquote
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.background import BackgroundTask
 
 app = FastAPI(title="YT Downloader", docs_url=None, redoc_url=None)
@@ -32,10 +32,31 @@ YT_DLP_BASE = [
     "--quiet",
     "--extractor-retries", "3",
     "--socket-timeout", "30",
-    "--extractor-args", "youtube:player_client=android",
+    "--extractor-args", "youtube:player_client=android,ios",
+    "--ffmpeg-location", "/usr/bin/ffmpeg",
     "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "--add-header", "Accept-Language:en-US,en;q=0.9",
 ]
+
+
+def _cleanup_old_files():
+    for pattern in ["/tmp/*.mp4", "/tmp/*.mp3", "/tmp/*.m4a", "/tmp/*.webm"]:
+        for f in glob.glob(pattern):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+
+
+def _extract_video_id(url: str) -> str:
+    if "shorts/" in url:
+        return url.split("shorts/")[1].split("?")[0].split("&")[0]
+    if "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0].split("&")[0]
+    m = __import__("re").search(r"v=([a-zA-Z0-9_-]{11})", url)
+    if m:
+        return m.group(1)
+    return "video"
 
 
 def _fmt_duration(seconds: int) -> str:
@@ -58,6 +79,14 @@ def _render_html(name: str) -> HTMLResponse:
     path = TEMPLATES_DIR / name
     content = path.read_text(encoding="utf-8")
     return HTMLResponse(content=content)
+
+
+def _file_headers(filename: str) -> dict:
+    return {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-cache",
+    }
 
 
 @app.get("/")
@@ -93,7 +122,7 @@ async def yt_info(url: str = Query(...)):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
     try:
         cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             return JSONResponse(status_code=400, content={"detail": result.stderr.strip() or "yt-dlp failed"})
         try:
@@ -141,23 +170,64 @@ async def yt_video(url: str = Query(...), quality: str = Query("best")):
     url = _clean_url(url)
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
+    video_id = _extract_video_id(url)
+    height_map = {"best": 1080, "720": 720, "480": 480, "360": 360}
+    height = height_map.get(quality, 1080)
+    fmt = (
+        f"bestvideo[height<={height}][ext=mp4]"
+        f"+bestaudio[ext=m4a]"
+        f"/bestvideo[height<={height}]+bestaudio"
+        f"/best[height<={height}]/best"
+    )
+    out_path = f"/tmp/{video_id}.mp4"
+    _cleanup_old_files()
     try:
-        fmt_map = {
-            "best": "bestvideo[ext=mp4]+bestaudio/best[ext=mp4]/best",
-            "720": "bestvideo[height<=720][ext=mp4]+bestaudio/best[ext=mp4]/best",
-            "480": "bestvideo[height<=480][ext=mp4]+bestaudio/best[ext=mp4]/best",
-            "360": "bestvideo[height<=360][ext=mp4]+bestaudio/best[ext=mp4]/best",
-        }
-        fmt = fmt_map.get(quality, fmt_map["best"])
-        cmd = [*YT_DLP_BASE, "--get-url", "--format", fmt, url]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        cmd = [
+            *YT_DLP_BASE,
+            "-f", fmt,
+            "--merge-output-format", "mp4",
+            "--no-playlist",
+            "-o", out_path,
+            url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             return JSONResponse(status_code=400, content={"detail": result.stderr.strip() or "yt-dlp failed"})
-        stream_url = result.stdout.strip()
-        if not stream_url:
-            return JSONResponse(status_code=400, content={"detail": "No stream URL returned"})
-        return RedirectResponse(url=stream_url, status_code=302)
+        files = glob.glob(f"/tmp/{video_id}*")
+        if not files:
+            return JSONResponse(status_code=500, content={"detail": "Downloaded file not found"})
+        dl_path = files[0]
+        info_cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
+        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=300)
+        title = "video"
+        if info_result.returncode == 0:
+            try:
+                info = json.loads(info_result.stdout.strip())
+                title = info.get("title", "video")
+            except json.JSONDecodeError:
+                pass
+        safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in title).strip() or "download"
+        filename = f"{safe}.mp4"
+
+        def cleanup():
+            try:
+                os.remove(dl_path)
+            except Exception:
+                pass
+
+        return FileResponse(
+            dl_path,
+            media_type="video/mp4",
+            filename=filename,
+            headers=_file_headers(filename),
+            background=BackgroundTask(cleanup),
+        )
     except Exception as e:
+        try:
+            for f in glob.glob(f"/tmp/{video_id}*"):
+                os.remove(f)
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
@@ -166,27 +236,27 @@ async def yt_audio(url: str = Query(...)):
     url = _clean_url(url)
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
-    video_id = url.split("shorts/")[-1].split("/")[-1].split("?")[0].split("&")[0]
-    if len(video_id) != 11:
-        m = __import__("re").search(r"v=([a-zA-Z0-9_-]{11})", url)
-        video_id = m.group(1) if m else "audio"
+    video_id = _extract_video_id(url)
     out_path = f"/tmp/{video_id}.%(ext)s"
+    _cleanup_old_files()
     try:
         cmd = [
             *YT_DLP_BASE,
             "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+            "--no-playlist",
+            "-x", "--audio-format", "mp3", "--audio-quality", "0",
             "-o", out_path,
             url,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             return JSONResponse(status_code=400, content={"detail": result.stderr.strip() or "yt-dlp failed"})
-        files = glob.glob(f"/tmp/{video_id}.*")
+        files = glob.glob(f"/tmp/{video_id}*")
         if not files:
             return JSONResponse(status_code=500, content={"detail": "Downloaded file not found"})
         dl_path = files[0]
         info_cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
-        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60)
+        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=300)
         title = "audio"
         if info_result.returncode == 0:
             try:
@@ -194,27 +264,26 @@ async def yt_audio(url: str = Query(...)):
                 title = info.get("title", "audio")
             except json.JSONDecodeError:
                 pass
-        keep = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.")
-        safe = "".join(c if c in keep else "_" for c in title).strip() or "download"
-        filename = f"{safe}.m4a"
+        safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in title).strip() or "download"
+        filename = f"{safe}.mp3"
 
         def cleanup():
             try:
-                os.unlink(dl_path)
+                os.remove(dl_path)
             except Exception:
                 pass
 
         return FileResponse(
             dl_path,
-            media_type="audio/mp4",
+            media_type="audio/mpeg",
             filename=filename,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers=_file_headers(filename),
             background=BackgroundTask(cleanup),
         )
     except Exception as e:
         try:
-            for f in glob.glob(f"/tmp/{video_id}.*"):
-                os.unlink(f)
+            for f in glob.glob(f"/tmp/{video_id}*"):
+                os.remove(f)
         except Exception:
             pass
         return JSONResponse(status_code=500, content={"detail": str(e)})
