@@ -1,4 +1,3 @@
-ARG CACHE_BUST=1
 FROM python:3.11-slim
 
 RUN apt-get update && \
@@ -19,10 +18,10 @@ USER appuser
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/')" || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/dashboard')" || exit 1
 
 LABEL org.opencontainers.image.title="YT Downloader" \
       org.opencontainers.image.description="Single-file YouTube video & audio downloader" \
       org.opencontainers.image.version="1.0.0"
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
