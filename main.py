@@ -6,10 +6,8 @@ from urllib.parse import quote
 import yt_dlp
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse, HTMLResponse
 from starlette.background import BackgroundTask
-from starlette.requests import Request
 
 app = FastAPI(title="YT Downloader", docs_url=None, redoc_url=None)
 
@@ -22,7 +20,7 @@ app.add_middleware(
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+TEMPLATES_DIR = BASE_DIR / "templates"
 
 YT_DLP_OPTS = {
     "quiet": True,
@@ -57,9 +55,15 @@ def get_format_string(quality: str) -> str:
     return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 
 
+def _render_html(name: str) -> HTMLResponse:
+    path = TEMPLATES_DIR / name
+    content = path.read_text(encoding="utf-8")
+    return HTMLResponse(content=content)
+
+
 @app.get("/")
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "active": "home"})
+async def index():
+    return _render_html("index.html")
 
 
 @app.get("/dashboard")
@@ -69,24 +73,18 @@ async def dashboard():
 
 
 @app.get("/index.html")
-async def index_html(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "active": "home"})
+async def index_html():
+    return _render_html("index.html")
 
 
 @app.get("/docs")
 async def docs_page():
-    from fastapi.responses import HTMLResponse
-    path = BASE_DIR / "templates" / "docs.html"
-    content = path.read_text(encoding="utf-8")
-    return HTMLResponse(content=content)
+    return _render_html("docs.html")
 
 
 @app.get("/docs.html")
 async def docs_html():
-    from fastapi.responses import HTMLResponse
-    path = BASE_DIR / "templates" / "docs.html"
-    content = path.read_text(encoding="utf-8")
-    return HTMLResponse(content=content)
+    return _render_html("docs.html")
 
 
 @app.get("/yt/info")
