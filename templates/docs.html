@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YT Downloader — Docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after {
+  box-sizing: border-box; margin: 0; padding: 0;
+}
+body {
+  font-family: 'JetBrains Mono', monospace;
+  background: #0a0a0a;
+  color: #e0e0e0;
+  min-height: 100vh;
+  background-image:
+    linear-gradient(rgba(0,255,204,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,204,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+a { color: #00ffcc; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.nav {
+  display: flex; justify-content: center; gap: 0.5rem;
+  padding: 1rem 2rem 0;
+}
+.nav a {
+  padding: 0.6rem 1.4rem; border-radius: 8px 8px 0 0;
+  font-size: 0.85rem; font-weight: 500;
+  border: 1px solid #222; border-bottom: none;
+  background: #0d0d0d; color: #888;
+  transition: all 0.2s;
+}
+.nav a:hover { text-decoration: none; color: #00ffcc; border-color: #333; }
+.nav a.active {
+  background: #111; color: #00ffcc; border-color: #00ffcc44;
+  box-shadow: 0 -2px 12px rgba(0,255,204,0.1);
+}
+
+.container { max-width: 800px; margin: 0 auto; padding: 0 2rem 4rem; }
+
+.card {
+  background: #111; border: 1px solid #222; border-radius: 12px;
+  padding: 2.5rem; box-shadow: 0 0 30px rgba(0,255,204,0.05);
+}
+
+h1 {
+  text-align: center; font-size: 1.8rem; font-weight: 700;
+  margin-bottom: 2rem; color: #00ffcc;
+  text-shadow: 0 0 20px rgba(0,255,204,0.3);
+  letter-spacing: 2px;
+}
+
+h2 {
+  color: #00ffcc; font-size: 1.15rem; margin: 2rem 0 0.75rem;
+  padding-bottom: 0.4rem; border-bottom: 1px solid #222;
+}
+
+h3 { color: #ccc; font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+
+p, li { line-height: 1.7; font-size: 0.9rem; color: #bbb; }
+
+ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+li { margin: 0.3rem 0; }
+
+code {
+  background: #1a1a1a; padding: 0.2rem 0.5rem;
+  border-radius: 4px; font-size: 0.82rem; color: #00ffcc;
+  border: 1px solid #222;
+}
+
+pre {
+  background: #0d0d0d; border: 1px solid #222; border-radius: 8px;
+  padding: 1.25rem; overflow-x: auto; margin: 0.75rem 0;
+}
+pre code {
+  background: none; border: none; padding: 0;
+  color: #c0c0c0; font-size: 0.82rem; line-height: 1.6;
+}
+
+table {
+  width: 100%; border-collapse: collapse; margin: 0.75rem 0;
+}
+th, td {
+  text-align: left; padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid #222; font-size: 0.85rem;
+}
+th { color: #00ffcc; font-weight: 500; }
+td { color: #bbb; }
+
+.endpoint {
+  background: #0d0d0d; border: 1px solid #00ffcc22; border-radius: 8px;
+  padding: 1rem 1.25rem; margin: 0.75rem 0;
+  display: flex; align-items: center; gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.endpoint .method {
+  font-weight: 700; font-size: 0.8rem; padding: 0.25rem 0.5rem;
+  border-radius: 4px; color: #0a0a0a; background: #00ffcc;
+}
+.endpoint .path {
+  font-size: 0.85rem; color: #e0e0e0;
+}
+
+footer {
+  text-align: center; padding: 3rem 2rem 2rem;
+  font-size: 0.75rem; color: #555;
+}
+
+@media (max-width: 600px) {
+  .container { padding: 0 1rem 3rem; }
+  .card { padding: 1.5rem; }
+  h1 { font-size: 1.4rem; }
+}
+</style>
+</head>
+<body>
+<div class="nav">
+  <a href="index.html">YT Downloader</a>
+  <a href="docs.html" class="active">Docs</a>
+  <a href="docs.html#api">API Reference</a>
+</div>
+
+<div class="container">
+  <div class="card">
+    <h1>📄 Documentation</h1>
+
+    <h2 id="overview">Overview</h2>
+    <p>
+      YT Downloader is a single-file, stateless YouTube downloader.
+      No database, no authentication, no sessions. Paste a URL, choose quality,
+      and download. Everything runs from one FastAPI app.
+    </p>
+
+    <h2 id="usage">Usage</h2>
+    <ol>
+      <li>Open the <a href="index.html">home page</a></li>
+      <li>Paste a YouTube URL into the input field</li>
+      <li>Click <strong>Fetch Info</strong> — thumbnail, title, and duration appear</li>
+      <li>Select your preferred quality from the dropdown</li>
+      <li>Click <strong>Download Video</strong> or <strong>Download Audio</strong></li>
+    </ol>
+
+    <h2 id="api">API Reference</h2>
+    <p>All endpoints return JSON (except download endpoints which stream files).</p>
+
+    <h3>Get Video Info</h3>
+    <div class="endpoint">
+      <span class="method">GET</span>
+      <span class="path">/yt/info?url=&lt;youtube_url&gt;</span>
+    </div>
+    <p>Returns video metadata — title, thumbnail, duration, available formats.</p>
+    <pre><code>{
+  "title": "Example Video",
+  "thumbnail": "https://i.ytimg.com/vi/.../maxresdefault.jpg",
+  "duration": "4:32",
+  "duration_seconds": 272,
+  "channel": "Channel Name",
+  "formats": [
+    {"format_id": "137", "ext": "mp4", "height": 1080, "label": "1080p", "filesize": 12345678},
+    {"format_id": "136", "ext": "mp4", "height": 720,  "label": "720p",  "filesize": 6543210}
+  ]
+}</code></pre>
+
+    <h3>Download Video</h3>
+    <div class="endpoint">
+      <span class="method">GET</span>
+      <span class="path">/yt/video?url=&lt;youtube_url&gt;&amp;quality=&lt;best|720|480|360&gt;</span>
+    </div>
+    <p>Streams the video file as an MP4 attachment. Quality defaults to <code>best</code>.</p>
+
+    <h3>Download Audio</h3>
+    <div class="endpoint">
+      <span class="method">GET</span>
+      <span class="path">/yt/audio?url=&lt;youtube_url&gt;</span>
+    </div>
+    <p>Extracts audio and streams as an MP3 attachment (192 kbps).</p>
+
+    <h3>Quick Examples</h3>
+    <pre><code># Get info
+curl "https://your-app.com/yt/info?url=https://youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Download best video
+curl -o video.mp4 "https://your-app.com/yt/video?url=https://youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Download 720p video
+curl -o video.mp4 "https://your-app.com/yt/video?url=https://youtube.com/watch?v=dQw4w9WgXcQ&quality=720"
+
+# Download audio
+curl -o audio.mp3 "https://your-app.com/yt/audio?url=https://youtube.com/watch?v=dQw4w9WgXcQ"</code></pre>
+
+    <h2 id="deploy">Deployment</h2>
+    <h3>Local</h3>
+    <pre><code>pip install -r requirements.txt
+uvicorn main:app --reload --port 8000</code></pre>
+
+    <h3>Docker</h3>
+    <pre><code>docker build -t yt-downloader .
+docker run -p 8000:8000 yt-downloader</code></pre>
+
+    <h3>Railway / Render</h3>
+    <p>Push to GitHub → create new service → select your repo.
+      Railway auto-detects the Dockerfile. Render users should use the Docker deploy method.
+    </p>
+
+    <h2 id="tech">Tech Stack</h2>
+    <table>
+      <tr><th>Component</th><th>Version</th></tr>
+      <tr><td>Python</td><td>3.11+</td></tr>
+      <tr><td>FastAPI</td><td>latest</td></tr>
+      <tr><td>yt-dlp</td><td>latest (auto-upgraded)</td></tr>
+      <tr><td>ffmpeg</td><td>system package</td></tr>
+      <tr><td>Jinja2</td><td>latest</td></tr>
+      <tr><td>uvicorn</td><td>latest</td></tr>
+    </table>
+  </div>
+</div>
+
+<footer>
+  YT Downloader &mdash; Single-file, stateless, no database &mdash;
+  <a href="https://github.com/">GitHub</a>
+</footer>
+</body>
+</html>
