@@ -30,10 +30,15 @@ YT_DLP_BASE = [
     "--no-check-certificate",
     "--no-warnings",
     "--quiet",
-    "--extractor-retries", "3",
-    "--socket-timeout", "30",
+    "--extractor-retries", "5",
+    "--socket-timeout", "60",
+    "--geo-bypass",
+    "--throttled-rate", "100K",
+    "--sleep-interval", "3",
+    "--max-sleep-interval", "10",
+    "--sleep-requests", "1",
     "--add-header", "User-Agent:com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip",
-    "--extractor-args", "youtube:player_client=android,tv_embedded",
+    "--extractor-args", "youtube:player_client=android,android_creator,android_music;include_dash_manifest=False;skip=webpage",
 ]
 
 
