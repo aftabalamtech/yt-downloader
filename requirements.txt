@@ -1,6 +1,5 @@
 fastapi
 uvicorn[standard]
-yt-dlp
 jinja2
 python-multipart
 aiofiles
