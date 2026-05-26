@@ -38,7 +38,8 @@ YT_DLP_BASE = [
     "--max-sleep-interval", "10",
     "--sleep-requests", "1",
     "--add-header", "User-Agent:com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip",
-    "--extractor-args", "youtube:player_client=android,android_creator,android_music;include_dash_manifest=False;skip=webpage",
+    "--extractor-args",
+    "youtube:player_client=android,android_embedded,ios;include_dash_manifest=False;skip=webpage,configs;generate_pot=True",
 ]
 
 
