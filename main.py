@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import unquote
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.background import BackgroundTask
@@ -171,26 +171,37 @@ async def yt_video(url: str = Query(...), quality: str = Query("best")):
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
     video_id = _extract_video_id(url)
-    height_map = {"best": 1080, "720": 720, "480": 480, "360": 360}
-    height = height_map.get(quality, 1080)
-    fmt = (
-        f"bestvideo[height<={height}][ext=mp4]"
-        f"+bestaudio[ext=m4a]"
-        f"/bestvideo[height<={height}]+bestaudio"
-        f"/best[height<={height}]/best"
-    )
-    out_path = f"/tmp/{video_id}.mp4"
-    _cleanup_old_files()
+    quality_map = {
+        "best": 1080,
+        "1080": 1080,
+        "720": 720,
+        "480": 480,
+        "360": 360,
+    }
+    height = quality_map.get(str(quality), 720)
+    format_str = f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+    print(f"Quality requested: {quality}")
+    print(f"Height limit: {height}")
+    print(f"Format string: {format_str}")
+    for old_file in glob.glob(f"/tmp/{video_id}.*"):
+        try:
+            os.remove(old_file)
+        except Exception:
+            pass
     try:
         cmd = [
-            *YT_DLP_BASE,
-            "-f", fmt,
+            "/usr/local/bin/yt-dlp",
+            "-f", format_str,
             "--merge-output-format", "mp4",
+            "--extractor-args", "youtube:player_client=android,ios",
+            "--no-check-certificate",
             "--no-playlist",
-            "-o", out_path,
+            "--ffmpeg-location", "/usr/bin/ffmpeg",
+            "-o", f"/tmp/{video_id}.mp4",
             url,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        print(f"yt-dlp stderr: {result.stderr}")
         if result.returncode != 0:
             return JSONResponse(status_code=400, content={"detail": result.stderr.strip() or "yt-dlp failed"})
         files = glob.glob(f"/tmp/{video_id}*")
@@ -219,15 +230,18 @@ async def yt_video(url: str = Query(...), quality: str = Query("best")):
             dl_path,
             media_type="video/mp4",
             filename=filename,
-            headers=_file_headers(filename),
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Access-Control-Allow-Origin": "*",
+            },
             background=BackgroundTask(cleanup),
         )
     except Exception as e:
-        try:
-            for f in glob.glob(f"/tmp/{video_id}*"):
+        for f in glob.glob(f"/tmp/{video_id}*"):
+            try:
                 os.remove(f)
-        except Exception:
-            pass
+            except Exception:
+                pass
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
@@ -237,24 +251,35 @@ async def yt_audio(url: str = Query(...)):
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
     video_id = _extract_video_id(url)
-    out_path = f"/tmp/{video_id}.%(ext)s"
-    _cleanup_old_files()
+    for old_file in glob.glob(f"/tmp/{video_id}.*"):
+        try:
+            os.remove(old_file)
+        except Exception:
+            pass
     try:
         cmd = [
-            *YT_DLP_BASE,
+            "/usr/local/bin/yt-dlp",
             "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+            "--extractor-args", "youtube:player_client=android,ios",
+            "--no-check-certificate",
             "--no-playlist",
-            "-x", "--audio-format", "mp3", "--audio-quality", "0",
-            "-o", out_path,
+            "--ffmpeg-location", "/usr/bin/ffmpeg",
+            "-x",
+            "--audio-format", "mp3",
+            "--audio-quality", "0",
+            "-o", f"/tmp/{video_id}.%(ext)s",
             url,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        print(f"Audio download stderr: {result.stderr}")
         if result.returncode != 0:
             return JSONResponse(status_code=400, content={"detail": result.stderr.strip() or "yt-dlp failed"})
-        files = glob.glob(f"/tmp/{video_id}*")
+        files = glob.glob(f"/tmp/{video_id}.*")
         if not files:
-            return JSONResponse(status_code=500, content={"detail": "Downloaded file not found"})
+            print(f"No file found. stderr: {result.stderr}")
+            return JSONResponse(status_code=500, content={"detail": f"Audio download failed: {result.stderr}"})
         dl_path = files[0]
+        print(f"Audio file found: {dl_path}, size: {os.path.getsize(dl_path)}")
         info_cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
         info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=300)
         title = "audio"
@@ -265,27 +290,23 @@ async def yt_audio(url: str = Query(...)):
             except json.JSONDecodeError:
                 pass
         safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in title).strip() or "download"
-        filename = f"{safe}.mp3"
-
-        def cleanup():
-            try:
-                os.remove(dl_path)
-            except Exception:
-                pass
 
         return FileResponse(
             dl_path,
             media_type="audio/mpeg",
-            filename=filename,
-            headers=_file_headers(filename),
-            background=BackgroundTask(cleanup),
+            filename=f"{safe}.mp3",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe}.mp3"',
+                "Access-Control-Allow-Origin": "*",
+            },
+            background=BackgroundTask(os.remove, dl_path),
         )
     except Exception as e:
-        try:
-            for f in glob.glob(f"/tmp/{video_id}*"):
+        for f in glob.glob(f"/tmp/{video_id}.*"):
+            try:
                 os.remove(f)
-        except Exception:
-            pass
+            except Exception:
+                pass
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
