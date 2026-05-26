@@ -1,10 +1,14 @@
+import glob
 import json
+import os
 import subprocess
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from starlette.background import BackgroundTask
 
 app = FastAPI(title="YT Downloader", docs_url=None, redoc_url=None)
 
@@ -38,6 +42,14 @@ def _fmt_duration(seconds: int) -> str:
     if h:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
+
+
+def _clean_url(url: str) -> str:
+    url = unquote(url)
+    if "shorts/" in url:
+        video_id = url.split("shorts/")[1].split("?")[0].split("&")[0]
+        return f"https://youtube.com/shorts/{video_id}"
+    return url
 
 
 def _render_html(name: str) -> HTMLResponse:
@@ -74,6 +86,7 @@ async def docs_html():
 
 @app.get("/yt/info")
 async def yt_info(url: str = Query(...)):
+    url = _clean_url(url)
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
     try:
@@ -123,6 +136,7 @@ async def yt_info(url: str = Query(...)):
 
 @app.get("/yt/video")
 async def yt_video(url: str = Query(...), quality: str = Query("best")):
+    url = _clean_url(url)
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
     try:
@@ -147,18 +161,60 @@ async def yt_video(url: str = Query(...), quality: str = Query("best")):
 
 @app.get("/yt/audio")
 async def yt_audio(url: str = Query(...)):
+    url = _clean_url(url)
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
+    video_id = url.split("shorts/")[-1].split("/")[-1].split("?")[0].split("&")[0]
+    if len(video_id) != 11:
+        m = __import__("re").search(r"v=([a-zA-Z0-9_-]{11})", url)
+        video_id = m.group(1) if m else "audio"
+    out_path = f"/tmp/{video_id}.%(ext)s"
     try:
-        cmd = [*YT_DLP_BASE, "--get-url", "--format", "bestaudio", url]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        cmd = [
+            *YT_DLP_BASE,
+            "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+            "-o", out_path,
+            url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             return JSONResponse(status_code=400, content={"detail": result.stderr.strip() or "yt-dlp failed"})
-        stream_url = result.stdout.strip()
-        if not stream_url:
-            return JSONResponse(status_code=400, content={"detail": "No stream URL returned"})
-        return RedirectResponse(url=stream_url, status_code=302)
+        files = glob.glob(f"/tmp/{video_id}.*")
+        if not files:
+            return JSONResponse(status_code=500, content={"detail": "Downloaded file not found"})
+        dl_path = files[0]
+        info_cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
+        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60)
+        title = "audio"
+        if info_result.returncode == 0:
+            try:
+                info = json.loads(info_result.stdout.strip())
+                title = info.get("title", "audio")
+            except json.JSONDecodeError:
+                pass
+        keep = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.")
+        safe = "".join(c if c in keep else "_" for c in title).strip() or "download"
+        filename = f"{safe}.m4a"
+
+        def cleanup():
+            try:
+                os.unlink(dl_path)
+            except Exception:
+                pass
+
+        return FileResponse(
+            dl_path,
+            media_type="audio/mp4",
+            filename=filename,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            background=BackgroundTask(cleanup),
+        )
     except Exception as e:
+        try:
+            for f in glob.glob(f"/tmp/{video_id}.*"):
+                os.unlink(f)
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
