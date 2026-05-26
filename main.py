@@ -33,6 +33,8 @@ YT_DLP_BASE = [
     "--extractor-retries", "3",
     "--socket-timeout", "30",
     "--extractor-args", "youtube:player_client=android",
+    "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "--add-header", "Accept-Language:en-US,en;q=0.9",
 ]
 
 
@@ -45,7 +47,7 @@ def _fmt_duration(seconds: int) -> str:
 
 
 def _clean_url(url: str) -> str:
-    url = unquote(url)
+    url = unquote(url.strip())
     if "shorts/" in url:
         video_id = url.split("shorts/")[1].split("?")[0].split("&")[0]
         return f"https://youtube.com/shorts/{video_id}"
