@@ -1,13 +1,14 @@
 import json
+import os
 import re
-import urllib.request
+import subprocess
+import tempfile
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
 
-import httpx
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.background import BackgroundTask
 
 app = FastAPI(title="YT Downloader", docs_url=None, redoc_url=None)
 
@@ -22,82 +23,22 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 
-PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://piped-api.garudalinux.org",
-    "https://api.piped.projectsegfau.lt",
-    "https://pipedapi.bocchitherock.it",
+YT_DLP_PATH = "/usr/local/bin/yt-dlp"
+
+YT_DLP_BASE = [
+    YT_DLP_PATH,
+    "--no-check-certificate",
+    "--no-warnings",
+    "--quiet",
+    "--extractor-retries", "3",
+    "--socket-timeout", "30",
+    "--extractor-args", "youtube:player_client=android",
 ]
 
 
-def _extract_video_id(url: str) -> str | None:
-    m = re.search(r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})', url)
-    if m:
-        return m.group(1)
-    m = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
-    if m:
-        return m.group(1)
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query)
-    return qs.get("v", [None])[0]
-
-
-def _piped_json(path: str) -> dict:
-    last_err = ""
-    for base in PIPED_INSTANCES:
-        try:
-            req = urllib.request.Request(f"{base}{path}", headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read())
-                    if isinstance(data, dict) and "error" not in data:
-                        return data
-                    last_err = data.get("error", "unknown error")
-                else:
-                    last_err = f"HTTP {resp.status}"
-        except Exception as e:
-            last_err = str(e)
-    raise Exception(f"All Piped instances failed: {last_err}")
-
-
-def _pick_video_stream(streams: list, quality: str) -> tuple[str, str] | None:
-    if quality == "best":
-        for s in streams:
-            if not s.get("videoOnly", True) and s.get("url"):
-                return s["url"], s.get("mimeType", "video/mp4")
-        for s in streams:
-            if s.get("url"):
-                return s["url"], s.get("mimeType", "video/mp4")
-    target = int(quality)
-    best = None
-    for s in streams:
-        h = 0
-        q = s.get("quality", "")
-        m = re.search(r"(\d+)", q)
-        if m:
-            h = int(m.group(1))
-        if h == target or (best is None and not s.get("videoOnly", True)):
-            if h == target:
-                best = s
-    if best and best.get("url"):
-        return best["url"], best.get("mimeType", "video/mp4")
-    for s in streams:
-        if s.get("url"):
-            return s["url"], s.get("mimeType", "video/mp4")
-    return None
-
-
-def _pick_audio_stream(streams: list) -> tuple[str, str] | None:
-    best = None
-    best_bitrate = 0
-    for s in streams:
-        bitrate = s.get("bitrate", 0) or 0
-        if bitrate > best_bitrate and s.get("url"):
-            best_bitrate = bitrate
-            best = s
-    if best and best.get("url"):
-        return best["url"], best.get("mimeType", "audio/mp4")
-    return None
+def _sanitize(name: str) -> str:
+    keep = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.")
+    return "".join(c if c in keep else "_" for c in name).strip() or "download"
 
 
 def _fmt_duration(seconds: int) -> str:
@@ -108,9 +49,17 @@ def _fmt_duration(seconds: int) -> str:
     return f"{m}:{s:02d}"
 
 
-def _sanitize_filename(name: str) -> str:
-    keep = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.")
-    return "".join(c if c in keep else "_" for c in name).strip() or "download"
+def _get_format_string(quality: str) -> str:
+    if quality == "best":
+        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    height_map = {"720": "720", "480": "480", "360": "360"}
+    h = height_map.get(quality)
+    if h:
+        return (
+            f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
+            f"best[height<={h}][ext=mp4]/best"
+        )
+    return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 
 
 def _render_html(name: str) -> HTMLResponse:
@@ -128,19 +77,6 @@ async def index():
 @app.head("/dashboard")
 async def dashboard():
     return {"status": "ok"}
-
-
-@app.get("/yt/debug")
-async def yt_debug():
-    results = []
-    for inst in PIPED_INSTANCES:
-        try:
-            req = urllib.request.Request(f"{inst}/health", headers={"User-Agent": "Mozilla/5.0"}, method="GET")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                results.append({"instance": inst, "status": resp.status})
-        except Exception as e:
-            results.append({"instance": inst, "error": str(e)})
-    return {"piped_instances": results}
 
 
 @app.get("/index.html")
@@ -162,76 +98,101 @@ async def docs_html():
 async def yt_info(url: str = Query(...)):
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
-    video_id = _extract_video_id(url)
-    if not video_id:
-        return JSONResponse(status_code=400, content={"detail": "Could not extract video ID"})
     try:
-        data = _piped_json(f"/streams/{video_id}")
+        cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            return JSONResponse(status_code=400, content={"detail": result.stderr.strip() or "yt-dlp failed"})
+        try:
+            info = json.loads(result.stdout.strip())
+        except json.JSONDecodeError:
+            return JSONResponse(status_code=400, content={"detail": f"yt-dlp output: {result.stdout.strip()[:200]}"})
         formats = []
-        seen_labels = set()
-        for s in data.get("videoStreams", []):
-            q = s.get("quality", "")
-            m = re.search(r"(\d+)", q)
-            if m:
-                h = int(m.group(1))
+        for f in info.get("formats", []):
+            h = f.get("height")
+            if h and h <= 2160:
                 label = f"{h}p"
-                if label not in seen_labels:
-                    seen_labels.add(label)
-                    formats.append({
-                        "format_id": s.get("format", ""),
-                        "ext": s.get("mimeType", "").split("/")[-1] or "mp4",
-                        "height": h,
-                        "label": label,
-                        "filesize": None,
-                    })
+                if f.get("fps") and f["fps"] > 30:
+                    label = f"{h}p{int(f['fps'])}"
+                formats.append({
+                    "format_id": f["format_id"],
+                    "ext": f.get("ext", ""),
+                    "height": h,
+                    "label": label,
+                    "filesize": f.get("filesize") or f.get("filesize_approx"),
+                })
         formats.sort(key=lambda x: (x["height"] or 0), reverse=True)
+        seen = set()
+        unique = []
+        for fm in formats:
+            key = fm["label"]
+            if key not in seen:
+                seen.add(key)
+                unique.append(fm)
         return {
-            "title": data.get("title", ""),
-            "thumbnail": data.get("thumbnailUrl", ""),
-            "duration": _fmt_duration(data.get("duration", 0)),
-            "duration_seconds": data.get("duration", 0),
-            "channel": data.get("uploader", ""),
-            "formats": formats,
+            "title": info.get("title", ""),
+            "thumbnail": info.get("thumbnail", ""),
+            "duration": _fmt_duration(info.get("duration", 0)),
+            "duration_seconds": info.get("duration", 0),
+            "channel": info.get("channel", info.get("uploader", "")),
+            "formats": unique,
         }
+    except subprocess.TimeoutExpired:
+        return JSONResponse(status_code=504, content={"detail": "yt-dlp timed out"})
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
-
-
-def _stream_file(stream_url: str, mime_type: str, filename: str) -> StreamingResponse:
-    async def generate():
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://www.youtube.com",
-        }
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
-            async with client.stream("GET", stream_url) as resp:
-                async for chunk in resp.aiter_bytes():
-                    yield chunk
-
-    return StreamingResponse(
-        generate(),
-        media_type=mime_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
 
 
 @app.get("/yt/video")
 async def yt_video(url: str = Query(...), quality: str = Query("best")):
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
-    video_id = _extract_video_id(url)
-    if not video_id:
-        return JSONResponse(status_code=400, content={"detail": "Could not extract video ID"})
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    tmp_path = tmp.name
+    tmp.close()
+    fmt = _get_format_string(quality)
     try:
-        data = _piped_json(f"/streams/{video_id}")
-        title = data.get("title", "video")
-        picked = _pick_video_stream(data.get("videoStreams", []), quality)
-        if not picked:
-            return JSONResponse(status_code=400, content={"detail": "No suitable stream found"})
-        stream_url, mime_type = picked
-        filename = _sanitize_filename(title) + ".mp4"
-        return _stream_file(stream_url, mime_type, filename)
+        info_cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
+        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60)
+        title = "video"
+        if info_result.returncode == 0:
+            try:
+                info = json.loads(info_result.stdout.strip())
+                title = info.get("title", "video")
+            except json.JSONDecodeError:
+                pass
+        cmd = [*YT_DLP_BASE, "-f", fmt, "-o", tmp_path, "--merge-output-format", "mp4", url]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            raise Exception(result.stderr.strip() or "yt-dlp download failed")
+        safe = _sanitize(title)
+        filename = f"{safe}.mp4"
+        media_type = "video/mp4"
+        if not os.path.exists(tmp_path):
+            for ext in [".mp4", ".webm", ".mkv"]:
+                p = tmp_path + ext
+                if os.path.exists(p):
+                    tmp_path = p
+                    break
+
+        def cleanup():
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+        return FileResponse(
+            tmp_path,
+            media_type=media_type,
+            filename=filename,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            background=BackgroundTask(cleanup),
+        )
     except Exception as e:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
@@ -239,20 +200,61 @@ async def yt_video(url: str = Query(...), quality: str = Query("best")):
 async def yt_audio(url: str = Query(...)):
     if not url or ("youtube.com" not in url and "youtu.be" not in url):
         return JSONResponse(status_code=400, content={"detail": "Invalid YouTube URL"})
-    video_id = _extract_video_id(url)
-    if not video_id:
-        return JSONResponse(status_code=400, content={"detail": "Could not extract video ID"})
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tmp_path = tmp.name
+    tmp.close()
+    out_base = tmp_path.replace(".mp3", "")
     try:
-        data = _piped_json(f"/streams/{video_id}")
-        title = data.get("title", "audio")
-        picked = _pick_audio_stream(data.get("audioStreams", []))
-        if not picked:
-            return JSONResponse(status_code=400, content={"detail": "No audio stream found"})
-        stream_url, mime_type = picked
-        ext = "mp4" if "mp4" in mime_type else "webm"
-        filename = _sanitize_filename(title) + f".{ext}"
-        return _stream_file(stream_url, mime_type, filename)
+        info_cmd = [*YT_DLP_BASE, "--dump-json", "--no-playlist", url]
+        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60)
+        title = "audio"
+        if info_result.returncode == 0:
+            try:
+                info = json.loads(info_result.stdout.strip())
+                title = info.get("title", "audio")
+            except json.JSONDecodeError:
+                pass
+        cmd = [
+            *YT_DLP_BASE,
+            "-f", "bestaudio/best",
+            "-o", out_base + ".%(ext)s",
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "192K",
+            url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            raise Exception(result.stderr.strip() or "yt-dlp download failed")
+        safe = _sanitize(title)
+        actual_path = tmp_path
+        filename = f"{safe}.mp3"
+        media_type = "audio/mpeg"
+        if os.path.exists(out_base + ".mp3"):
+            actual_path = out_base + ".mp3"
+        elif os.path.exists(out_base + ".m4a"):
+            actual_path = out_base + ".m4a"
+            filename = f"{safe}.m4a"
+            media_type = "audio/mp4"
+
+        def cleanup():
+            try:
+                os.unlink(actual_path)
+            except Exception:
+                pass
+
+        return FileResponse(
+            actual_path,
+            media_type=media_type,
+            filename=filename,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            background=BackgroundTask(cleanup),
+        )
     except Exception as e:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
