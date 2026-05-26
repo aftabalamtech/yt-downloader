@@ -62,6 +62,12 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "active": "home"})
 
 
+@app.get("/dashboard")
+@app.head("/dashboard")
+async def dashboard():
+    return {"status": "ok"}
+
+
 @app.get("/index.html")
 async def index_html(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "active": "home"})
