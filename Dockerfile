@@ -34,4 +34,4 @@ LABEL org.opencontainers.image.title="YT Downloader" \
       org.opencontainers.image.description="Single-file YouTube video & audio downloader" \
       org.opencontainers.image.version="1.0.0"
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
